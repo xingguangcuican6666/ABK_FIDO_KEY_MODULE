@@ -1,6 +1,8 @@
 package com.abk.extension.fido
 
 import android.util.Base64
+import androidx.credentials.CreatePublicKeyCredentialRequest
+import androidx.credentials.GetPublicKeyCredentialOption
 import androidx.credentials.provider.ProviderCreateCredentialRequest
 import androidx.credentials.provider.ProviderGetCredentialRequest
 import java.security.MessageDigest
@@ -12,17 +14,21 @@ internal class WebAuthnCtapBridge(private val hid: CtapHidEndpoint) {
 
     fun getAssertion(request: ProviderGetCredentialRequest): String {
         val option = request.credentialOptions.first()
-        val json = option.credentialRetrievalData.getString(KEY_REQUEST_JSON)
+        val json = option.requestData.getString(GetPublicKeyCredentialOption.BUNDLE_KEY_REQUEST_JSON)
             ?: error("missing WebAuthn request JSON")
         val o = JSONObject(json)
         val rpId = o.optString("rpId").ifBlank { error("missing rpId") }
         val clientData = clientData("webauthn.get", o.getString("challenge"), request.callingAppInfo.packageName)
+        val allowCredentials: List<ByteArray> = o.optJSONArray("allowCredentials")?.let { array ->
+            (0 until array.length()).map { index ->
+                val credential = array.getJSONObject(index)
+                CborWriter().map(1).int(1).bytes(b64(credential.getString("id"))).build()
+            }
+        } ?: emptyList()
         val req = CborWriter().map(4)
             .int(1).text(rpId)
             .int(2).bytes(sha256(clientData))
-            .int(3).array(o.optJSONArray("allowCredentials")?.let { a ->
-                (0 until a.length()).map { CborWriter().map(1).int(1).bytes(b64(a.getJSONObject(it).getString("id"))).build() }
-            } ?: emptyList())
+            .int(3).array(allowCredentials)
             .int(5).map(1).text("uv").bool(o.optString("userVerification") == "required")
             .build()
         val response = transact(req)
@@ -42,7 +48,8 @@ internal class WebAuthnCtapBridge(private val hid: CtapHidEndpoint) {
 
     fun makeCredential(request: ProviderCreateCredentialRequest): String {
         val data = request.callingRequest.credentialData
-        val json = data.getString(KEY_REQUEST_JSON) ?: error("missing WebAuthn creation JSON")
+        val json = data.getString(CreatePublicKeyCredentialRequest.BUNDLE_KEY_REQUEST_JSON)
+            ?: error("missing WebAuthn creation JSON")
         val o = JSONObject(json)
         val rp = o.getJSONObject("rp"); val user = o.getJSONObject("user")
         val challenge = o.getString("challenge")
@@ -81,7 +88,6 @@ internal class WebAuthnCtapBridge(private val hid: CtapHidEndpoint) {
     private fun enc(v: ByteArray) = Base64.encodeToString(v, Base64.URL_SAFE or Base64.NO_PADDING or Base64.NO_WRAP)
     private fun sha256(v: ByteArray) = MessageDigest.getInstance("SHA-256").digest(v)
 
-    companion object { const val KEY_REQUEST_JSON = "androidx.credentials.BUNDLE_KEY_REQUEST_JSON" }
 }
 
 private class CborWriter(private val b: java.io.ByteArrayOutputStream = java.io.ByteArrayOutputStream()) {

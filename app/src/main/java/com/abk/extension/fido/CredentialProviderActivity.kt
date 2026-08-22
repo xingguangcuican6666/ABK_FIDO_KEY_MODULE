@@ -5,13 +5,10 @@ import android.content.Intent
 import android.os.Bundle
 import androidx.credentials.GetCredentialResponse
 import androidx.credentials.PublicKeyCredential
-import androidx.credentials.exceptions.GetCredentialException
 import androidx.credentials.exceptions.GetCredentialUnknownException
 import androidx.credentials.exceptions.CreateCredentialUnknownException
 import androidx.credentials.provider.PendingIntentHandler
-import androidx.credentials.provider.ProviderCreateCredentialRequest
 import androidx.credentials.CreatePublicKeyCredentialResponse
-import androidx.credentials.exceptions.CreateCredentialException
 import kotlin.concurrent.thread
 
 class CredentialProviderActivity : Activity() {
@@ -29,7 +26,7 @@ class CredentialProviderActivity : Activity() {
                     finishWithError(it.message ?: "FIDO request failed"); return
                 }
                 val result = Intent()
-                PendingIntentHandler.setGetCredentialResponse(result, GetCredentialResponse(PublicKeyCredential(responseJson)), getRequest)
+                PendingIntentHandler.setGetCredentialResponse(result, GetCredentialResponse(PublicKeyCredential(responseJson)))
                 setResult(RESULT_OK, result); finish(); return
             }
             val createRequest = PendingIntentHandler.retrieveProviderCreateCredentialRequest(intent)
