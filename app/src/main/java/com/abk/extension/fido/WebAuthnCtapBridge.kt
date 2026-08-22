@@ -13,9 +13,11 @@ internal class WebAuthnCtapBridge(private val hid: CtapHidEndpoint) {
     private var cid: Int = -1
 
     fun getAssertion(request: ProviderGetCredentialRequest): String {
-        val option = request.credentialOptions.first()
-        val json = option.requestData.getString(GetPublicKeyCredentialOption.BUNDLE_KEY_REQUEST_JSON)
-            ?: error("missing WebAuthn request JSON")
+        val option = request.credentialOptions
+            .filterIsInstance<GetPublicKeyCredentialOption>()
+            .firstOrNull()
+            ?: error("missing public key credential option")
+        val json = option.requestJson
         val o = JSONObject(json)
         val rpId = o.optString("rpId").ifBlank { error("missing rpId") }
         val clientData = clientData("webauthn.get", o.getString("challenge"), request.callingAppInfo.packageName)
@@ -47,9 +49,9 @@ internal class WebAuthnCtapBridge(private val hid: CtapHidEndpoint) {
     }
 
     fun makeCredential(request: ProviderCreateCredentialRequest): String {
-        val data = request.callingRequest.credentialData
-        val json = data.getString(CreatePublicKeyCredentialRequest.BUNDLE_KEY_REQUEST_JSON)
-            ?: error("missing WebAuthn creation JSON")
+        val createRequest = request.callingRequest as? CreatePublicKeyCredentialRequest
+            ?: error("missing public key credential request")
+        val json = createRequest.requestJson
         val o = JSONObject(json)
         val rp = o.getJSONObject("rp"); val user = o.getJSONObject("user")
         val challenge = o.getString("challenge")
