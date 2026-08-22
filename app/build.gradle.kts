@@ -60,4 +60,7 @@ dependencies {
     implementation("androidx.biometric:biometric:1.1.0")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("com.github.topjohnwu.libsu:core:5.2.2")
+    // Android 14+ Credential Manager provider bridge used by browser/passkey flows.
+    implementation("androidx.credentials:credentials:1.5.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.5.0")
 }

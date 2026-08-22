@@ -95,6 +95,16 @@ internal object RootShell {
         )
     }
 
+    fun writeDeviceBase64(path: String, payloadBase64: String): CommandResult = run(
+        "printf '%s' ${shellQuote(payloadBase64)} | base64 -d > ${shellQuote(path)}",
+        timeoutSeconds = 40L,
+    )
+
+    fun readDeviceBase64(path: String, count: Int, timeoutSeconds: Long): CommandResult = run(
+        "dd if=${shellQuote(path)} bs=$count count=1 2>/dev/null | base64 | tr -d '\\n'",
+        timeoutSeconds,
+    )
+
     fun copyFileToMetadata(srcPath: String, dstPath: String): CommandResult {
         return run(
             """
@@ -146,11 +156,11 @@ internal object RootShell {
         )
     }
 
-    fun run(script: String): CommandResult {
+    fun run(script: String, timeoutSeconds: Long = 10L): CommandResult {
         init()
         return try {
             val output = mutableListOf<String>()
-            val result = createRootShell(timeoutSeconds = 10L).use { shell ->
+            val result = createRootShell(timeoutSeconds = timeoutSeconds).use { shell ->
                 shell.newJob()
                     .to(output, output)
                     .add(script)

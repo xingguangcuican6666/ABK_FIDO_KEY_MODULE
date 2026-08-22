@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
 
     <application
         android:allowBackup="false"
@@ -50,6 +52,12 @@
             android:launchMode="singleInstance"
             android:theme="@style/Theme.AbkFido.Translucent" />
 
+        <activity
+            android:name=".CredentialProviderActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.AbkFido.Translucent" />
+
         <receiver
             android:name=".SyncTriggerReceiver"
             android:enabled="true"
@@ -75,6 +83,19 @@
             android:directBootAware="true"
             android:exported="false"
             android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
+            android:name=".AbkCredentialProviderService"
+            android:enabled="@bool/credential_provider_enabled"
+            android:exported="true"
+            android:permission="android.permission.BIND_CREDENTIAL_PROVIDER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.credentials.CredentialProviderService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.credentials.provider"
+                android:resource="@xml/credential_provider" />
+        </service>
 
         <provider
             android:name=".FidoInitProvider"

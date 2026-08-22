@@ -334,12 +334,20 @@ struct abk_fido_usb {
 	struct abk_fido_device *owner;
 	u8 idle;
 	u8 protocol;
+	bool userspace;
 };
 
 static struct abk_fido_device abk_fido_dev = {
 	.lock = __MUTEX_INITIALIZER(abk_fido_dev.lock),
 	.next_cid = 1,
 };
+
+/* A transport-independent CTAP HID endpoint for local consumers (Credential
+ * Manager provider and the desktop LAN bridge).  It uses the exact same
+ * 64-byte CTAP HID framing as the USB gadget, but never touches USB queues.
+ */
+static struct abk_fido_usb abk_fido_user_usb;
+static bool abk_fido_user_registered;
 
 static DEFINE_IDA(abk_fido_ida);
 static DEFINE_MUTEX(abk_fido_ida_lock);
@@ -1969,18 +1977,165 @@ static int abk_fido_make_authdata_assert(const char *rp_id,
 	return 0;
 }
 
-static bool abk_fido_is_dummy_make_credential(struct abk_fido_make_cred_req *req)
+static bool abk_fido_is_windows_select_device_make_credential(struct abk_fido_make_cred_req *req)
 {
-	return (!strcmp(req->rp_id, ".dummy") && !strcmp(req->user_name, "dummy")) ||
-	       (!strcmp(req->rp_id, "SelectDevice") &&
-		!strcmp(req->user_name, "SelectDevice"));
+	return !strcmp(req->rp_id, "SelectDevice") &&
+	       !strcmp(req->user_name, "SelectDevice");
 }
 
-static int abk_fido_make_dummy_credential_resp(struct abk_fido_make_cred_req *req,
-					       u8 *payload, size_t *payload_len)
+static bool abk_fido_is_webauthn_dummy_make_credential(struct abk_fido_make_cred_req *req)
+{
+	return !strcmp(req->rp_id, ".dummy") && !strcmp(req->user_name, "dummy");
+}
+
+static int abk_fido_encode_dummy_make_credential_cbor(u8 *payload,
+						      size_t *payload_len)
 {
 	struct abk_cbor_writer w;
 	u8 auth_data[37] = { 0 };
+
+	abk_cbor_writer_init(&w, payload, ABK_FIDO_MAX_CBOR);
+	abk_cbor_put_map(&w, 3);
+	/* Match WearAuthn's DUMMY_MAKE_CREDENTIAL_RESPONSE ordering: 2, 1, 3. */
+	abk_cbor_put_int(&w, 2);
+	abk_cbor_put_bytes(&w, auth_data, sizeof(auth_data));
+	abk_cbor_put_int(&w, 1);
+	abk_cbor_put_text(&w, "packed");
+	abk_cbor_put_int(&w, 3);
+	abk_cbor_put_map(&w, 2);
+	abk_cbor_put_text(&w, "alg");
+	abk_cbor_put_int(&w, ABK_FIDO_COSE_ALG_ES256);
+	abk_cbor_put_text(&w, "sig");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	if (w.err)
+		return w.err;
+
+	*payload_len = w.pos;
+	return 0;
+}
+
+static int abk_fido_make_windows_select_device_resp(struct abk_fido_make_cred_req *req,
+						    u8 *payload, size_t *payload_len)
+{
+	struct abk_cbor_writer w;
+	u8 inner_payload[128];
+	u8 response_payload[1 + sizeof(inner_payload)];
+	u8 zero_aaguid[16] = { 0 };
+	size_t inner_payload_len = 0;
+	int ret;
+
+	mutex_lock(&abk_fido_dev.lock);
+	ret = abk_fido_load_store_locked();
+	if (ret && ret != -ENOENT)
+		goto out_unlock;
+
+	abk_fido_set_last_trace_locked(
+		"windows selectDevice rp=%s user=%s uv=%u",
+		req->rp_id, req->user_name, req->uv);
+	pr_info("abk_fido_key: windows selectDevice rp=%s user=%s uv=%u\n",
+		req->rp_id, req->user_name, req->uv);
+
+	ret = abk_fido_auth_begin_locked(ABK_FIDO_CTAP_MAKE_CREDENTIAL,
+					 req->rp_id, req->uv, false);
+	if (ret)
+		goto out_unlock;
+
+	ret = abk_fido_encode_dummy_make_credential_cbor(inner_payload,
+							 &inner_payload_len);
+	if (ret)
+		goto out_unlock;
+
+	response_payload[0] = ABK_FIDO_CTAP_SUCCESS;
+	memcpy(response_payload + 1, inner_payload, inner_payload_len);
+
+	abk_cbor_writer_init(&w, payload, ABK_FIDO_MAX_CBOR);
+	abk_cbor_put_map(&w, 3);
+	abk_cbor_put_text(&w, "deviceInfo");
+	abk_cbor_put_map(&w, 30);
+	abk_cbor_put_text(&w, "providerType");
+	abk_cbor_put_text(&w, "Hid");
+	abk_cbor_put_text(&w, "providerName");
+	abk_cbor_put_text(&w, "ABK FIDO");
+	abk_cbor_put_text(&w, "devicePath");
+	abk_cbor_put_text(&w, "usb:abk-fido");
+	abk_cbor_put_text(&w, "manufacturer");
+	abk_cbor_put_text(&w, "ABK");
+	abk_cbor_put_text(&w, "product");
+	abk_cbor_put_text(&w, "ABK FIDO");
+	abk_cbor_put_text(&w, "u2fProtocol");
+	abk_cbor_put_bool(&w, true);
+	abk_cbor_put_text(&w, "u2fAppId");
+	abk_cbor_put_bool(&w, true);
+	abk_cbor_put_text(&w, "aaGuid");
+	abk_cbor_put_bytes(&w, zero_aaguid, sizeof(zero_aaguid));
+	abk_cbor_put_text(&w, "pinStatus");
+	abk_cbor_put_uint(&w, 1);
+	abk_cbor_put_text(&w, "pinRetries");
+	abk_cbor_put_uint(&w, abk_fido_dev.store.pin_retries);
+	abk_cbor_put_text(&w, "powerCycle");
+	abk_cbor_put_bool(&w, false);
+	abk_cbor_put_text(&w, "forceChangePin");
+	abk_cbor_put_bool(&w, false);
+	abk_cbor_put_text(&w, "residentKey");
+	abk_cbor_put_bool(&w, false);
+	abk_cbor_put_text(&w, "credentialListIndexPlusOne");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "credentialId");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "hmacSecret");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "credWithHmacSecretArray");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "uvStatus");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "uvRetries");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "pinRequiredBeforeSelect");
+	abk_cbor_put_bool(&w, false);
+	abk_cbor_put_text(&w, "ticket");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "credLargeBlobStatus");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "credLargeBlob");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "maxMsgSize");
+	abk_cbor_put_uint(&w, ABK_FIDO_MAX_MSG);
+	abk_cbor_put_text(&w, "maxSerializedLargeBlobArray");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "thirdPartyPayment");
+	abk_cbor_put_bool(&w, false);
+	abk_cbor_put_text(&w, "transports");
+	abk_cbor_put_uint(&w, 1);
+	abk_cbor_put_text(&w, "clientDataJSON");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "registrationResponseJSON");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "authenticationResponseJSON");
+	abk_cbor_put_bytes(&w, NULL, 0);
+	abk_cbor_put_text(&w, "status");
+	abk_cbor_put_uint(&w, 0);
+	abk_cbor_put_text(&w, "response");
+	abk_cbor_put_bytes(&w, response_payload, inner_payload_len + 1);
+	if (w.err) {
+		ret = w.err;
+		goto out_unlock;
+	}
+
+	*payload_len = w.pos;
+	pr_info("abk_fido_key: windows selectDevice response len=%zu inner=%zu head=%*phN\n",
+		*payload_len,
+		inner_payload_len + 1,
+		(*payload_len >= 24) ? 24 : (int)*payload_len,
+		payload);
+	ret = 0;
+out_unlock:
+	mutex_unlock(&abk_fido_dev.lock);
+	return ret;
+}
+
+static int abk_fido_make_webauthn_dummy_credential_resp(struct abk_fido_make_cred_req *req,
+						       u8 *payload, size_t *payload_len)
+{
 	int ret;
 
 	mutex_lock(&abk_fido_dev.lock);
@@ -1999,25 +2154,9 @@ static int abk_fido_make_dummy_credential_resp(struct abk_fido_make_cred_req *re
 	if (ret)
 		goto out_unlock;
 
-	abk_cbor_writer_init(&w, payload, ABK_FIDO_MAX_CBOR);
-	abk_cbor_put_map(&w, 3);
-	/* Match WearAuthn's DUMMY_MAKE_CREDENTIAL_RESPONSE ordering: 2, 1, 3. */
-	abk_cbor_put_int(&w, 2);
-	abk_cbor_put_bytes(&w, auth_data, sizeof(auth_data));
-	abk_cbor_put_int(&w, 1);
-	abk_cbor_put_text(&w, "packed");
-	abk_cbor_put_int(&w, 3);
-	abk_cbor_put_map(&w, 2);
-	abk_cbor_put_text(&w, "alg");
-	abk_cbor_put_int(&w, ABK_FIDO_COSE_ALG_ES256);
-	abk_cbor_put_text(&w, "sig");
-	abk_cbor_put_bytes(&w, NULL, 0);
-	if (w.err) {
-		ret = w.err;
+	ret = abk_fido_encode_dummy_make_credential_cbor(payload, payload_len);
+	if (ret)
 		goto out_unlock;
-	}
-
-	*payload_len = w.pos;
 	pr_info("abk_fido_key: dummy makeCredential response len=%zu head=%*phN\n",
 		*payload_len,
 		(*payload_len >= 24) ? 24 : (int)*payload_len,
@@ -2530,15 +2669,21 @@ static noinline_for_stack int abk_fido_make_credential_resp(struct abk_fido_make
 	u64 pub_digits[ECC_MAX_DIGITS * 2] = {};
 	int ret;
 	u8 flags = ABK_FIDO_CRED_FLAG_UP;
-	bool is_dummy = abk_fido_is_dummy_make_credential(req);
+	bool is_windows_select_device = abk_fido_is_windows_select_device_make_credential(req);
+	bool is_webauthn_dummy = abk_fido_is_webauthn_dummy_make_credential(req);
 
-	pr_info("abk_fido_key: makeCredential dummy_check rp=%s user=%s result=%u\n",
+	pr_info("abk_fido_key: makeCredential dummy_check rp=%s user=%s windows=%u webauthn=%u\n",
 		req->rp_id[0] ? req->rp_id : "<empty>",
 		req->user_name[0] ? req->user_name : "<empty>",
-		is_dummy);
+		is_windows_select_device,
+		is_webauthn_dummy);
 
-	if (is_dummy)
-		return abk_fido_make_dummy_credential_resp(req, payload, payload_len);
+	if (is_windows_select_device)
+		return abk_fido_make_windows_select_device_resp(req, payload,
+								payload_len);
+	if (is_webauthn_dummy)
+		return abk_fido_make_webauthn_dummy_credential_resp(req, payload,
+								    payload_len);
 
 	mutex_lock(&abk_fido_dev.lock);
 	ret = abk_fido_load_store_locked();
@@ -3070,6 +3215,9 @@ static void abk_fido_send_hid_message(struct abk_fido_usb *usb, u32 cid, u8 cmd,
 	u8 seq = 0;
 	size_t chunk;
 
+	if (!usb)
+		usb = &abk_fido_user_usb;
+
 	memset(packet, 0, sizeof(packet));
 	put_unaligned_be32(cid, packet);
 	packet[4] = cmd | 0x80;
@@ -3090,7 +3238,10 @@ static void abk_fido_send_hid_message(struct abk_fido_usb *usb, u32 cid, u8 cmd,
 		offset += chunk;
 	}
 
-	abk_fido_tx_kick(usb);
+	if (usb->userspace)
+		wake_up_interruptible(&usb->tx_packets.wait);
+	else
+		abk_fido_tx_kick(usb);
 }
 
 static void abk_fido_send_hid_error(struct abk_fido_usb *usb, u32 cid, u8 err)
@@ -3433,6 +3584,66 @@ static const struct file_operations abk_fido_misc_fops = {
 	.llseek = no_llseek,
 };
 
+static ssize_t abk_fido_user_read(struct file *file, char __user *buf,
+				  size_t count, loff_t *ppos)
+{
+	struct miscdevice *misc = file->private_data;
+	struct abk_fido_usb *usb = container_of(misc, struct abk_fido_usb, miscdev);
+	struct abk_fido_report report;
+
+	if (count < ABK_FIDO_REPORT_LEN)
+		return -EINVAL;
+	if (!abk_fido_queue_pop(&usb->tx_packets, &report)) {
+		if (file->f_flags & O_NONBLOCK)
+			return -EAGAIN;
+		if (wait_event_interruptible(usb->tx_packets.wait,
+					     !abk_fido_queue_empty(&usb->tx_packets)))
+			return -ERESTARTSYS;
+		if (!abk_fido_queue_pop(&usb->tx_packets, &report))
+			return -EAGAIN;
+	}
+	if (copy_to_user(buf, report.data, report.len))
+		return -EFAULT;
+	return report.len;
+}
+
+static ssize_t abk_fido_user_write(struct file *file, const char __user *buf,
+				   size_t count, loff_t *ppos)
+{
+	struct miscdevice *misc = file->private_data;
+	struct abk_fido_usb *usb = container_of(misc, struct abk_fido_usb, miscdev);
+	u8 packet[ABK_FIDO_REPORT_LEN];
+
+	if (count != ABK_FIDO_REPORT_LEN)
+		return -EINVAL;
+	if (copy_from_user(packet, buf, count))
+		return -EFAULT;
+	if (!abk_fido_queue_push(&usb->rx_packets, packet, count))
+		return -EBUSY;
+	schedule_work(&usb->rx_work);
+	return count;
+}
+
+static __poll_t abk_fido_user_poll(struct file *file, poll_table *wait)
+{
+	struct miscdevice *misc = file->private_data;
+	struct abk_fido_usb *usb = container_of(misc, struct abk_fido_usb, miscdev);
+	__poll_t mask = EPOLLOUT | EPOLLWRNORM;
+
+	poll_wait(file, &usb->tx_packets.wait, wait);
+	if (!abk_fido_queue_empty(&usb->tx_packets))
+		mask |= EPOLLIN | EPOLLRDNORM;
+	return mask;
+}
+
+static const struct file_operations abk_fido_user_fops = {
+	.owner = THIS_MODULE,
+	.read = abk_fido_user_read,
+	.write = abk_fido_user_write,
+	.poll = abk_fido_user_poll,
+	.llseek = no_llseek,
+};
+
 static int abk_fido_setup(struct usb_function *f,
 			  const struct usb_ctrlrequest *ctrl)
 {
@@ -3663,6 +3874,7 @@ static int abk_fido_bind(struct usb_configuration *c, struct usb_function *f)
 	usb->miscdev.minor = MISC_DYNAMIC_MINOR;
 	usb->miscdev.name = usb->misc_name;
 	usb->miscdev.fops = &abk_fido_misc_fops;
+	usb->miscdev.mode = 0600;
 	ret = misc_register(&usb->miscdev);
 	if (ret) {
 		usb_free_all_descriptors(f);
@@ -3777,6 +3989,11 @@ static ssize_t hid_dev_show(struct kobject *kobj, struct kobj_attribute *attr, c
 	ret = sysfs_emit(buf, "%s\n", abk_fido_dev.hid_name);
 	mutex_unlock(&abk_fido_dev.lock);
 	return ret;
+}
+
+static ssize_t ctap_dev_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
+{
+	return sysfs_emit(buf, "/dev/abk_fido_ctap\n");
 }
 
 static ssize_t credential_count_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
@@ -3961,6 +4178,7 @@ static struct kobj_attribute enabled_attr = __ATTR_RO(enabled);
 static struct kobj_attribute bound_attr = __ATTR_RO(bound);
 static struct kobj_attribute udc_attr = __ATTR_RO(udc);
 static struct kobj_attribute hid_dev_attr = __ATTR_RO(hid_dev);
+static struct kobj_attribute ctap_dev_attr = __ATTR_RO(ctap_dev);
 static struct kobj_attribute credential_count_attr = __ATTR_RO(credential_count);
 static struct kobj_attribute last_error_attr = __ATTR_RO(last_error);
 static struct kobj_attribute last_trace_attr = __ATTR_RO(last_trace);
@@ -3987,6 +4205,7 @@ static struct attribute *abk_fido_attrs[] = {
 	&bound_attr.attr,
 	&udc_attr.attr,
 	&hid_dev_attr.attr,
+	&ctap_dev_attr.attr,
 	&credential_count_attr.attr,
 	&last_error_attr.attr,
 	&last_trace_attr.attr,
@@ -4160,6 +4379,29 @@ static int __init abk_fido_core_init(void)
 		return ret;
 	}
 
+	memset(&abk_fido_user_usb, 0, sizeof(abk_fido_user_usb));
+	abk_fido_user_usb.owner = &abk_fido_dev;
+	abk_fido_user_usb.userspace = true;
+	abk_fido_user_usb.online = true;
+	INIT_WORK(&abk_fido_user_usb.rx_work, abk_fido_rx_worker);
+	abk_fido_queue_init(&abk_fido_user_usb.rx_packets);
+	abk_fido_queue_init(&abk_fido_user_usb.tx_packets);
+	strscpy(abk_fido_user_usb.misc_name, "abk_fido_ctap",
+		sizeof(abk_fido_user_usb.misc_name));
+	abk_fido_user_usb.miscdev.minor = MISC_DYNAMIC_MINOR;
+	abk_fido_user_usb.miscdev.name = abk_fido_user_usb.misc_name;
+	abk_fido_user_usb.miscdev.fops = &abk_fido_user_fops;
+	abk_fido_user_usb.miscdev.mode = 0600;
+	ret = misc_register(&abk_fido_user_usb.miscdev);
+	if (ret) {
+		sysfs_remove_bin_file(abk_fido_dev.kobj, &store_blob_attr);
+		sysfs_remove_group(abk_fido_dev.kobj, &abk_fido_attr_group);
+		kobject_put(abk_fido_dev.kobj);
+		abk_fido_dev.kobj = NULL;
+		return ret;
+	}
+	abk_fido_user_registered = true;
+
 	abk_fido_dev.store.pin_retries = ABK_FIDO_PIN_RETRIES_DEFAULT;
 #if IS_ENABLED(CONFIG_ABK_CONTROL)
 	ret = abk_control_register(&abk_fido_control_ops);
@@ -4175,6 +4417,11 @@ static void __exit abk_fido_core_exit(void)
 #if IS_ENABLED(CONFIG_ABK_CONTROL)
 	abk_control_unregister(&abk_fido_control_ops);
 #endif
+	if (abk_fido_user_registered) {
+		cancel_work_sync(&abk_fido_user_usb.rx_work);
+		misc_deregister(&abk_fido_user_usb.miscdev);
+		abk_fido_user_registered = false;
+	}
 	kvfree(abk_fido_dev.store_blob_staging);
 	abk_fido_dev.store_blob_staging = NULL;
 	abk_fido_dev.store_blob_staging_len = 0;

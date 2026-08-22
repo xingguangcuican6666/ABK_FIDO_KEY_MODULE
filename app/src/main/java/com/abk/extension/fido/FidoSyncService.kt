@@ -13,8 +13,10 @@ import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import kotlin.concurrent.thread
+import java.security.SecureRandom
 
 class FidoSyncService : Service() {
+    private var lanServer: LanFidoServer? = null
     @Volatile
     private var running = false
     @Volatile
@@ -32,6 +34,7 @@ class FidoSyncService : Service() {
     override fun onCreate() {
         super.onCreate()
         RootShell.init()
+        lanServer = LanFidoServer(readPairingCode()).also { it.start() }
         startForeground(NOTIFICATION_ID, buildNotification())
         running = true
         Log.i(TAG, "service created")
@@ -51,8 +54,18 @@ class FidoSyncService : Service() {
 
     override fun onDestroy() {
         running = false
+        lanServer?.stop()
         Log.i(TAG, "service destroyed")
         super.onDestroy()
+    }
+
+    private fun readPairingCode(): String {
+        val path = "/metadata/abk_fido_pairing_code"
+        val existing = RootShell.readTextFile(path).stdout.trim()
+        if (existing.matches(Regex("[0-9]{6,12}"))) return existing
+        val generated = (100000 + SecureRandom().nextInt(900000)).toString()
+        RootShell.writeTextFile(path, generated + "\n")
+        return generated
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
