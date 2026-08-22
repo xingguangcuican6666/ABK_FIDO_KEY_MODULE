@@ -348,6 +348,7 @@ static struct abk_fido_device abk_fido_dev = {
  */
 static struct abk_fido_usb abk_fido_user_usb;
 static bool abk_fido_user_registered;
+static bool abk_fido_usb_registered;
 
 static DEFINE_IDA(abk_fido_ida);
 static DEFINE_MUTEX(abk_fido_ida_lock);
@@ -3954,7 +3955,7 @@ static struct usb_function *abk_fido_alloc(struct usb_function_instance *fi)
 	return &usb->func;
 }
 
-DECLARE_USB_FUNCTION_INIT(abk_fido, abk_fido_alloc_inst, abk_fido_alloc);
+DECLARE_USB_FUNCTION(abk_fido, abk_fido_alloc_inst, abk_fido_alloc);
 
 static ssize_t enabled_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
@@ -4402,6 +4403,19 @@ static int __init abk_fido_core_init(void)
 	}
 	abk_fido_user_registered = true;
 
+	ret = usb_function_register(&abk_fidousb_func);
+	if (ret) {
+		cancel_work_sync(&abk_fido_user_usb.rx_work);
+		misc_deregister(&abk_fido_user_usb.miscdev);
+		abk_fido_user_registered = false;
+		sysfs_remove_bin_file(abk_fido_dev.kobj, &store_blob_attr);
+		sysfs_remove_group(abk_fido_dev.kobj, &abk_fido_attr_group);
+		kobject_put(abk_fido_dev.kobj);
+		abk_fido_dev.kobj = NULL;
+		return ret;
+	}
+	abk_fido_usb_registered = true;
+
 	abk_fido_dev.store.pin_retries = ABK_FIDO_PIN_RETRIES_DEFAULT;
 #if IS_ENABLED(CONFIG_ABK_CONTROL)
 	ret = abk_control_register(&abk_fido_control_ops);
@@ -4417,6 +4431,10 @@ static void __exit abk_fido_core_exit(void)
 #if IS_ENABLED(CONFIG_ABK_CONTROL)
 	abk_control_unregister(&abk_fido_control_ops);
 #endif
+	if (abk_fido_usb_registered) {
+		usb_function_unregister(&abk_fidousb_func);
+		abk_fido_usb_registered = false;
+	}
 	if (abk_fido_user_registered) {
 		cancel_work_sync(&abk_fido_user_usb.rx_work);
 		misc_deregister(&abk_fido_user_usb.miscdev);
