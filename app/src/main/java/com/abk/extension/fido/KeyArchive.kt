@@ -127,10 +127,14 @@ internal object KeyArchive {
         .put("user_id", userId.b64())
         .put("priv_key", privKey.b64())
         .put("pub_key", pubKey.b64())
+        .put("hmac_secret", hmacSecret.b64())
 
     private fun JSONObject.toRecord(): FidoCredentialRecord {
         val credId = optString("cred_id").b64()
         val privKey = optString("priv_key").b64()
+        val hmacSecret = optString("hmac_secret").b64().let {
+            if (it.size == 32) it else ByteArray(32)
+        }
         if (credId.size != 32 || privKey.size != 32) {
             throw ArchiveError("key file holds a malformed credential")
         }
@@ -145,6 +149,7 @@ internal object KeyArchive {
             userDisplay = optString("display"),
             privKey = privKey,
             pubKey = optString("pub_key").b64(),
+            hmacSecret = hmacSecret,
         )
     }
 

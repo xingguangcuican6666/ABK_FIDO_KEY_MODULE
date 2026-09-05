@@ -9,7 +9,8 @@ private const val LOCAL_DB_NAME = "abk_fido.db"
 private const val METADATA_DB_PATH = "/metadata/abk_fido.db"
 private const val METADATA_BLOB_PATH = "/metadata/abk_fido_store.bin"
 private const val STORE_DISK_HEADER_SIZE = 84
-private const val STORE_DISK_CRED_SIZE = 452
+private const val STORE_DISK_CRED_SIZE = 484
+private const val STORE_DISK_CRED_SIZE_V1 = 452
 private const val STORE_DISK_MAX_CREDS = 32
 private val syncLock = Any()
 
@@ -353,12 +354,19 @@ private fun String.toNoteValue(): String {
 
 private fun ByteArray.storeCredentialCount(): Int {
     if (size < STORE_DISK_HEADER_SIZE) return -1
+    // Version 1 blobs carry 452-byte slots; v2 slots are 484 bytes with the
+    // 32-byte hmac-secret tail.
+    val version = (this[4].toInt() and 0xff) or
+        ((this[5].toInt() and 0xff) shl 8) or
+        ((this[6].toInt() and 0xff) shl 16) or
+        ((this[7].toInt() and 0xff) shl 24)
+    val credSize = if (version == 1) STORE_DISK_CRED_SIZE_V1 else STORE_DISK_CRED_SIZE
     val credsBytes = size - STORE_DISK_HEADER_SIZE
     if (credsBytes <= 0) return 0
-    val slots = minOf(credsBytes / STORE_DISK_CRED_SIZE, STORE_DISK_MAX_CREDS)
+    val slots = minOf(credsBytes / credSize, STORE_DISK_MAX_CREDS)
     var count = 0
     for (i in 0 until slots) {
-        val offset = STORE_DISK_HEADER_SIZE + (i * STORE_DISK_CRED_SIZE)
+        val offset = STORE_DISK_HEADER_SIZE + (i * credSize)
         if (getOrNull(offset)?.toInt() == 1) {
             count++
         }
