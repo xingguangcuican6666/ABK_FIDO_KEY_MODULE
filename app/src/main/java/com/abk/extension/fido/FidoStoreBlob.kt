@@ -37,6 +37,9 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
             userDisplay = raw.readCString(base + OFF_USER_DISPLAY, LEN_NAME),
             privKey = raw.copyOfRange(base + OFF_PRIV_KEY, base + OFF_PRIV_KEY + LEN_PRIV_KEY),
             pubKey = raw.copyOfRange(base + OFF_PUB_KEY, base + OFF_PUB_KEY + LEN_PUB_KEY),
+            hmacSecret = raw.copyOfRange(
+                base + OFF_HMAC_SECRET, base + OFF_HMAC_SECRET + LEN_HMAC_SECRET
+            ),
         )
     }
 
@@ -74,6 +77,9 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
         copy.writeCString(base + OFF_USER_DISPLAY, LEN_NAME, record.userDisplay)
         record.privKey.copyInto(copy, base + OFF_PRIV_KEY, 0, minOf(record.privKey.size, LEN_PRIV_KEY))
         record.pubKey.copyInto(copy, base + OFF_PUB_KEY, 0, minOf(record.pubKey.size, LEN_PUB_KEY))
+        record.hmacSecret.copyInto(
+            copy, base + OFF_HMAC_SECRET, 0, minOf(record.hmacSecret.size, LEN_HMAC_SECRET)
+        )
         return FidoStoreBlob(copy)
     }
 
@@ -89,13 +95,18 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
     }
 
     companion object {
-        const val SIZE = 14548
+        const val SIZE = 15572
         const val HEADER_SIZE = 84
-        const val CRED_SIZE = 452
+        const val CRED_SIZE = 484
         const val MAX_CREDS = 32
 
+        /** Version 1 layout: 452-byte slots, no hmac-secret. */
+        const val SIZE_V1 = 14548
+        const val CRED_SIZE_V1 = 452
+
         private const val MAGIC = 0x41424646
-        private const val VERSION = 1
+        private const val VERSION = 2
+        private const val VERSION_V1 = 1
 
         private const val OFF_MAGIC = 0
         private const val OFF_VERSION = 4
@@ -110,6 +121,7 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
         private const val OFF_USER_DISPLAY = 292
         private const val OFF_PRIV_KEY = 356
         private const val OFF_PUB_KEY = 388
+        private const val OFF_HMAC_SECRET = 452
 
         private const val LEN_CRED_ID = 32
         private const val LEN_USER_ID = 64
@@ -117,24 +129,40 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
         private const val LEN_NAME = 64
         private const val LEN_PRIV_KEY = 32
         private const val LEN_PUB_KEY = 64
+        private const val LEN_HMAC_SECRET = 32
 
         /**
          * Accept a blob read from disk. A short file is padded and a long one
          * truncated, because the driver only ever looks at the first [SIZE]
          * bytes; a wrong magic or version is refused outright, and so is a bad
-         * CRC unless [ignoreCrc] is set.
+         * CRC unless [ignoreCrc] is set. A version 1 blob is upgraded to the
+         * v2 slot layout in memory, with every credential's hmac-secret zero.
          */
         fun parse(bytes: ByteArray, ignoreCrc: Boolean = false): FidoStoreBlob? {
             if (bytes.size < HEADER_SIZE) return null
-            val normalized = if (bytes.size == SIZE) bytes.copyOf() else ByteArray(SIZE).also {
-                bytes.copyInto(it, 0, 0, minOf(bytes.size, SIZE))
-            }
-            if (normalized.readIntLe(OFF_MAGIC) != MAGIC) return null
-            if (normalized.readIntLe(OFF_VERSION) != VERSION) return null
-            if (!ignoreCrc && bytes.size >= SIZE) {
-                val crc = CRC32()
-                crc.update(normalized, OFF_SIGN_COUNT, SIZE - OFF_SIGN_COUNT)
-                if (crc.value.toInt() != normalized.readIntLe(OFF_CRC32)) return null
+            if (bytes.readIntLe(OFF_MAGIC) != MAGIC) return null
+            val version = bytes.readIntLe(OFF_VERSION)
+            val normalized: ByteArray
+            when {
+                version == VERSION && bytes.size >= SIZE -> {
+                    if (!ignoreCrc && !crcOk(bytes, SIZE)) return null
+                    normalized = if (bytes.size == SIZE) {
+                        bytes.copyOf()
+                    } else {
+                        ByteArray(SIZE).also { bytes.copyInto(it, 0, 0, SIZE) }
+                    }
+                }
+                version == VERSION_V1 && bytes.size >= SIZE_V1 -> {
+                    if (!ignoreCrc && !crcOk(bytes, SIZE_V1)) return null
+                    normalized = ByteArray(SIZE)
+                    bytes.copyInto(normalized, 0, 0, HEADER_SIZE)
+                    for (slot in 0 until MAX_CREDS) {
+                        val v1Base = HEADER_SIZE + slot * CRED_SIZE_V1
+                        val v2Base = HEADER_SIZE + slot * CRED_SIZE
+                        bytes.copyInto(normalized, v2Base, v1Base, v1Base + CRED_SIZE_V1)
+                    }
+                }
+                else -> return null
             }
             return FidoStoreBlob(normalized)
         }
@@ -145,6 +173,12 @@ internal class FidoStoreBlob private constructor(private val raw: ByteArray) {
             bytes.writeIntLe(OFF_MAGIC, MAGIC)
             bytes.writeIntLe(OFF_VERSION, VERSION)
             return FidoStoreBlob(bytes)
+        }
+
+        private fun crcOk(bytes: ByteArray, size: Int): Boolean {
+            val crc = CRC32()
+            crc.update(bytes, OFF_SIGN_COUNT, size - OFF_SIGN_COUNT)
+            return crc.value.toInt() == bytes.readIntLe(OFF_CRC32)
         }
 
         private fun slotOffset(slot: Int): Int {
@@ -199,6 +233,8 @@ internal class FidoCredentialRecord(
     val userDisplay: String,
     val privKey: ByteArray,
     val pubKey: ByteArray,
+    /** 32-byte hmac-secret; all zero means the credential has no secret. */
+    val hmacSecret: ByteArray = ByteArray(32),
 ) {
     val credIdHex: String get() = credId.joinToString("") { "%02x".format(it) }
 

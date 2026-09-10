@@ -7,6 +7,9 @@ config ABK_FIDO_KEY
 	select CRYPTO_SHA256
 	select CRYPTO_AES
 	select CRYPTO_CBC
+	select CRYPTO_SKCIPHER
+	select CRYPTO_KPP
+	select CRYPTO_ECDH
 	help
 	  Add a kernel-integrated FIDO2 HID authenticator that is injected
 	  into the active Android USB configfs gadget as an extra HID

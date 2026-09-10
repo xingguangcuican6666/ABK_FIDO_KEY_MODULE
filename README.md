@@ -6,7 +6,7 @@ Android phone build into a composite USB FIDO2 security key.
 `abk_fido_key_module` 是一个 ABK 自定义外部内核模块，用来把 Android
 手机侧内核扩展成一个复合 USB FIDO2 Security Key。
 
-Current version / 当前版本: `0.2.0`
+Current version / 当前版本: `0.3.0`
 
 ## Overview / 项目概览
 
@@ -246,13 +246,12 @@ offer the FIDO SQLite mirror APK alongside the kernel module.
 
 ## Current Limits / 当前边界
 
-- Windows Hello is untested. The device selection ceremony is handled — Windows
+- Windows Hello is supported on the USB path, including offline hmac-secret
+  unlock. The device selection ceremony is handled — Windows
   sends a makeCredential with `rp.id` = `user.name` = `"SelectDevice"` (built in
   `_SelectDevice`, `webauthnctap.cpp`) and the driver answers it like Chromium's
   `.dummy` request: collect the local approval, return a throwaway
-  makeCredential response, create nothing. What is *not* verified is the rest of
-  the Windows path, including how it reacts to a key that advertises `uv` with
-  no `clientPin` and refuses silent `getAssertion`.
+  makeCredential response, create nothing.
 - The LAN relay needs a virtual HID device on the desktop, and creating one is
   privileged on both platforms: on Linux the agent uses `/dev/uhid` and must run
   as root; on Windows it needs the `abkfidovhid` driver from
