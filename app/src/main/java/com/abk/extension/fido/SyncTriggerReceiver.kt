@@ -3,19 +3,15 @@ package com.abk.extension.fido
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.os.Build
 
 class SyncTriggerReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent?) {
         FidoKeepAliveJobService.schedule(context)
-        val serviceIntent = Intent(context, FidoSyncService::class.java).apply {
-            action = FidoSyncService.ACTION_SYNC_NOW
-            putExtra(FidoSyncService.EXTRA_REASON, intent?.action ?: "broadcast")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(serviceIntent)
-        } else {
-            context.startService(serviceIntent)
-        }
+        // Boot, user-unlock and package-replaced broadcasts arrive while the app
+        // sits in the background, where startForegroundService() is disallowed;
+        // throwing here would crash the receiver's process. requestSync swallows
+        // that failure, and the keep-alive job scheduled above starts the service
+        // once the constraints allow it.
+        FidoSyncService.requestSync(context, intent?.action ?: "broadcast")
     }
 }

@@ -32,6 +32,17 @@ internal class FidoSettings private constructor(private val prefs: SharedPrefere
         set(value) = prefs.edit().putBoolean(KEY_AUTO_AUTHORIZE, value).apply()
 
     /**
+     * The credential provider that was the system default before we took the
+     * preferred slot, so it can be handed back when the user switches away.
+     * Null once there is nothing to restore.
+     */
+    var previousCredentialPrimary: String?
+        get() = prefs.getString(KEY_PREV_PRIMARY, null)
+        set(value) = prefs.edit().apply {
+            if (value.isNullOrBlank()) remove(KEY_PREV_PRIMARY) else putString(KEY_PREV_PRIMARY, value)
+        }.apply()
+
+    /**
      * Last time a credential of [rpId] was used. The kernel store has no room
      * for a timestamp, so the approval path records it here instead.
      */
@@ -55,6 +66,7 @@ internal class FidoSettings private constructor(private val prefs: SharedPrefere
         private const val KEY_FIDO_ENABLED = "fido_enabled"
         private const val KEY_WIRELESS_ENABLED = "wireless_enabled"
         private const val KEY_AUTO_AUTHORIZE = "lan_auto_authorize"
+        private const val KEY_PREV_PRIMARY = "prev_credential_primary"
         private const val KEY_LAST_USED_PREFIX = "last_used_rp_"
 
         fun of(context: Context): FidoSettings {

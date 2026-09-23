@@ -176,13 +176,20 @@ internal object RootShell {
     }
 
     fun launchFidoAuthPromptActivity(
+        packageName: String,
         requestId: Int,
         command: String,
         rpId: String,
     ): CommandResult {
+        // The activity class always lives in the com.abk.extension.fido
+        // namespace, but the running package carries the build's applicationId
+        // (e.g. the .debug suffix), so the component must be built from the
+        // caller's own package with the fully-qualified class name rather than
+        // the ".FidoAuthPromptActivity" shorthand.
+        val component = "$packageName/com.abk.extension.fido.FidoAuthPromptActivity"
         return run(
             """
-            am start -n 'com.abk.extension.fido/.FidoAuthPromptActivity' \
+            am start -n ${shellQuote(component)} \
               --ei 'request_id' ${requestId} \
               --es 'command' ${shellQuote(command)} \
               --es 'rp_id' ${shellQuote(rpId)}

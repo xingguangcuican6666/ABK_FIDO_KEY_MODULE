@@ -28,6 +28,21 @@
     <string name="status_host_waiting">正在等待 USB 主机</string>
     <string name="status_disabled">此开关关闭时，网站的请求都会被拒绝。</string>
 
+    <!-- 系统凭据提供方 -->
+    <string name="section_system_provider">系统提供方</string>
+    <string name="provider_row_title">系统 Passkey 提供方</string>
+    <string name="provider_status_preferred">已启用，并已设为系统首选</string>
+    <string name="provider_status_enabled">已启用，但系统首选是其它应用</string>
+    <string name="provider_status_disabled_with_current">未启用 · 当前首选：%1$s</string>
+    <string name="provider_status_disabled">未启用 · 点按设为系统 FIDO 提供方</string>
+    <string name="provider_action_open_settings">在系统设置中管理</string>
+    <string name="provider_action_set_preferred">设为系统首选（Root）</string>
+    <string name="provider_action_restore">恢复之前的提供方（Root）</string>
+    <string name="provider_enable_done">已将 ABK 设为系统 FIDO 提供方</string>
+    <string name="provider_restore_done">已恢复之前的提供方</string>
+    <string name="provider_change_failed">无法切换提供方，此操作需要 Root。</string>
+    <string name="provider_settings_unavailable">未找到凭据提供方的系统设置页面。</string>
+
     <string name="section_wireless">无线</string>
     <string name="wireless_switch_title">通过 Wi‑Fi 使用 FIDO</string>
     <string name="wireless_switch_summary">允许本网络中已授权的电脑使用此密钥</string>

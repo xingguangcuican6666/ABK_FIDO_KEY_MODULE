@@ -11,6 +11,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.text.format.DateUtils
 import android.view.View
 import android.widget.ImageButton
@@ -51,6 +52,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var masterSwitch: MaterialSwitch
     private lateinit var wirelessSwitch: MaterialSwitch
     private lateinit var wirelessRow: View
+    private lateinit var providerSection: View
+    private lateinit var providerRow: View
+    private lateinit var providerSummary: TextView
     private lateinit var statusSummary: TextView
     private lateinit var pairingSummary: TextView
     private lateinit var lanSummary: TextView
@@ -59,6 +63,8 @@ class MainActivity : AppCompatActivity() {
 
     private var credentials: List<FidoCredentialRecord> = emptyList()
     private var pairingCode: String = ""
+    private var providerStatus: CredentialProviderControl.Status? = null
+    private var providerRootAvailable = false
     private var busy = false
 
     /** An archive the user has authorized, waiting for a destination document. */
@@ -108,6 +114,9 @@ class MainActivity : AppCompatActivity() {
         masterSwitch = findViewById(R.id.masterSwitch)
         wirelessSwitch = findViewById(R.id.wirelessSwitch)
         wirelessRow = findViewById(R.id.wirelessRow)
+        providerSection = findViewById(R.id.providerSection)
+        providerRow = findViewById(R.id.providerRow)
+        providerSummary = findViewById(R.id.providerSummary)
         statusSummary = findViewById(R.id.statusSummary)
         pairingSummary = findViewById(R.id.pairingSummary)
         lanSummary = findViewById(R.id.lanClientsSummary)
@@ -128,6 +137,12 @@ class MainActivity : AppCompatActivity() {
             FidoSyncService.applyPolicy(this)
             refresh()
         }
+        // The system only routes passkey requests to a provider on Android 14+,
+        // so the whole row is meaningless before that.
+        val providerSupported = CredentialProviderControl.supported
+        providerSection.isVisible = providerSupported
+        providerRow.isVisible = providerSupported
+        providerRow.setOnClickListener { showProviderOptions() }
         findViewById<View>(R.id.pairingRow).setOnClickListener { showPairingCode() }
         findViewById<View>(R.id.lanClientsRow).setOnClickListener {
             startActivity(Intent(this, LanClientsActivity::class.java))
@@ -150,6 +165,8 @@ class MainActivity : AppCompatActivity() {
         val authorized: Int,
         val pending: Int,
         val total: Int,
+        val providerStatus: CredentialProviderControl.Status?,
+        val rootAvailable: Boolean,
     )
 
     private fun refresh() {
@@ -159,6 +176,7 @@ class MainActivity : AppCompatActivity() {
         wirelessRow.isEnabled = fidoEnabled
         wirelessRow.alpha = if (fidoEnabled) 1f else 0.4f
         io.execute {
+            val providerSupported = CredentialProviderControl.supported
             val snapshot = Snapshot(
                 driverPresent = FidoKernelBridge.isPresent(),
                 bound = FidoKernelBridge.readBound(),
@@ -168,6 +186,8 @@ class MainActivity : AppCompatActivity() {
                 authorized = clients.authorizedCount(),
                 pending = clients.pendingCount(),
                 total = clients.list().size,
+                providerStatus = if (providerSupported) CredentialProviderControl.read(this) else null,
+                rootAvailable = providerSupported && RootShell.isRootAvailable(),
             )
             main.post { if (!isFinishing && !isDestroyed) render(snapshot) }
         }
@@ -190,6 +210,18 @@ class MainActivity : AppCompatActivity() {
         if (snapshot.store == null) lines += getString(R.string.status_root_unavailable)
         if (!settings.fidoEnabled) lines += getString(R.string.status_disabled)
         statusSummary.text = lines.joinToString("\n")
+
+        providerStatus = snapshot.providerStatus
+        providerRootAvailable = snapshot.rootAvailable
+        snapshot.providerStatus?.let { status ->
+            providerSummary.text = when {
+                status.preferred -> getString(R.string.provider_status_preferred)
+                status.enabled -> getString(R.string.provider_status_enabled)
+                status.otherPreferredLabel != null ->
+                    getString(R.string.provider_status_disabled_with_current, status.otherPreferredLabel)
+                else -> getString(R.string.provider_status_disabled)
+            }
+        }
 
         pairingSummary.text = if (snapshot.pairingCode.isBlank()) {
             getString(R.string.pairing_code_unavailable)
@@ -465,6 +497,71 @@ class MainActivity : AppCompatActivity() {
             .setNegativeButton(R.string.action_close, null)
             .setPositiveButton(R.string.action_import) { _, _ -> openDocument.launch(arrayOf("*/*")) }
             .show()
+    }
+
+    /**
+     * The system provider row. It always offers the safe path — the system
+     * settings screen where the user picks providers by hand — and, when root
+     * is available, a one-tap switch that makes this app the preferred provider
+     * (or hands the slot back). The switch changes which app answers passkey
+     * requests, so it stays behind this explicit choice.
+     */
+    private fun showProviderOptions() {
+        val status = providerStatus
+        val message = when {
+            status == null -> getString(R.string.provider_status_disabled)
+            status.preferred -> getString(R.string.provider_status_preferred)
+            status.enabled -> getString(R.string.provider_status_enabled)
+            status.otherPreferredLabel != null ->
+                getString(R.string.provider_status_disabled_with_current, status.otherPreferredLabel)
+            else -> getString(R.string.provider_status_disabled)
+        }
+        val builder = MaterialAlertDialogBuilder(this)
+            .setTitle(R.string.provider_row_title)
+            .setMessage(message)
+            .setNeutralButton(R.string.provider_action_open_settings) { _, _ -> openCredentialSettings() }
+            .setNegativeButton(R.string.action_close, null)
+        if (providerRootAvailable && status != null) {
+            if (status.preferred) {
+                builder.setPositiveButton(R.string.provider_action_restore) { _, _ -> changeProvider(enable = false) }
+            } else {
+                builder.setPositiveButton(R.string.provider_action_set_preferred) { _, _ -> changeProvider(enable = true) }
+            }
+        }
+        builder.show()
+    }
+
+    private fun openCredentialSettings() {
+        // ACTION_CREDENTIAL_PROVIDER wants a package: data URI to focus on us;
+        // fall back to the bare action, then to the top-level settings, so the
+        // user always lands somewhere they can change the provider.
+        val targets = listOf(
+            Intent(Settings.ACTION_CREDENTIAL_PROVIDER).setData(Uri.parse("package:$packageName")),
+            Intent(Settings.ACTION_CREDENTIAL_PROVIDER),
+            Intent(Settings.ACTION_SETTINGS),
+        )
+        for (intent in targets) {
+            if (runCatching { startActivity(intent) }.isSuccess) return
+        }
+        toast(getString(R.string.provider_settings_unavailable))
+    }
+
+    private fun changeProvider(enable: Boolean) {
+        toast(getString(R.string.working))
+        io.execute {
+            val ok = runCatching {
+                if (enable) CredentialProviderControl.enableAsPreferred(this) else CredentialProviderControl.restore(this)
+            }.getOrDefault(false)
+            main.post {
+                if (isFinishing || isDestroyed) return@post
+                if (ok) {
+                    toast(getString(if (enable) R.string.provider_enable_done else R.string.provider_restore_done))
+                } else {
+                    alert(getString(R.string.provider_change_failed))
+                }
+                refresh()
+            }
+        }
     }
 
     private fun askForNotificationsIfNeeded() {

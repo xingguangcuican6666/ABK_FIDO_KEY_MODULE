@@ -239,6 +239,7 @@ class FidoSyncService : Service() {
         BiometricAuthBridge.begin(pending.requestId)
         Log.i(TAG, "launching auth prompt requestId=${pending.requestId}")
         val launch = RootShell.launchFidoAuthPromptActivity(
+            packageName = packageName,
             requestId = pending.requestId,
             command = pending.command,
             rpId = pending.rpId
@@ -333,11 +334,7 @@ class FidoSyncService : Service() {
             val intent = Intent(context, FidoSyncService::class.java).apply {
                 action = ACTION_APPLY_POLICY
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
         }
 
         /** Ask the running service to sync the store to persistent storage. */
@@ -346,11 +343,32 @@ class FidoSyncService : Service() {
                 action = ACTION_SYNC_NOW
                 putExtra(EXTRA_REASON, reason)
             }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            startGuarded(context, intent)
+        }
+
+        /**
+         * Start the service, tolerating the Android 12+ background
+         * foreground-service-start restriction. Every trigger that can fire
+         * while the process has no foreground standing funnels through here: a
+         * boot / user-unlock / package-replaced broadcast (SyncTriggerReceiver),
+         * the keep-alive job, and the provider's own cold-start init
+         * (FidoInitProvider). In those contexts startForegroundService() throws
+         * ForegroundServiceStartNotAllowedException, and that is fatal inside a
+         * BroadcastReceiver or ContentProvider — it kills the whole process
+         * before the Credential Manager ceremony can run, surfacing to the
+         * browser as a generic "unknown error". Swallow it: the ceremony starts
+         * the service from the foreground CredentialProviderActivity, where the
+         * start is allowed, and the keep-alive job catches up on every other
+         * trigger.
+         */
+        private fun startGuarded(context: Context, intent: Intent) {
+            runCatching {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    context.startForegroundService(intent)
+                } else {
+                    context.startService(intent)
+                }
+            }.onFailure { Log.w(TAG, "service start skipped (${intent.action}): ${it.message}") }
         }
     }
 }

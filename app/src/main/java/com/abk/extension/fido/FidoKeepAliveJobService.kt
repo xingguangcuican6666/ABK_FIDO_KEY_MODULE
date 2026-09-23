@@ -6,20 +6,13 @@ import android.app.job.JobScheduler
 import android.app.job.JobService
 import android.content.ComponentName
 import android.content.Context
-import android.content.Intent
-import android.os.Build
 
 class FidoKeepAliveJobService : JobService() {
     override fun onStartJob(params: JobParameters?): Boolean {
-        val intent = Intent(this, FidoSyncService::class.java).apply {
-            action = FidoSyncService.ACTION_SYNC_NOW
-            putExtra(FidoSyncService.EXTRA_REASON, "job_keepalive")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        // The keep-alive job can fire while the app is in the background, where a
+        // foreground-service start is disallowed; requestSync tolerates that
+        // instead of letting the exception crash the job's process.
+        FidoSyncService.requestSync(this, "job_keepalive")
         jobFinished(params, false)
         return true
     }

@@ -184,6 +184,15 @@ closing the app changes nothing about how the key behaves.
   read-only and local approval can no longer be disabled, so the switch is
   enforced in userspace: the service denies every request while it is off, and
   each denial also starts the driver's 3 s cooldown.
+- **System provider** (Android 14+ only) surfaces whether the OS routes passkey
+  requests to this app. The companion registers as a Credential Manager provider,
+  but the user still has to enable it, so this row reads the current enabled /
+  preferred provider from the system and opens the system settings screen to
+  switch by hand. With root it also offers a one-tap switch that makes the
+  companion the preferred provider — and hands the slot back — by writing the
+  same `credential_service` / `credential_service_primary` secure settings the
+  Settings UI writes. That switch changes which app answers passkey requests, so
+  it stays behind an explicit choice and is gated on root.
 - **FIDO over Wi‑Fi** starts and stops the LAN relay described below.
 - **Pairing code** shows the code from `/metadata/abk_fido_pairing_code` and
   copies it to the clipboard.

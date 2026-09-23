@@ -2,11 +2,8 @@ package com.abk.extension.fido
 
 import android.content.ContentProvider
 import android.content.ContentValues
-import android.content.Context
-import android.content.Intent
 import android.database.Cursor
 import android.net.Uri
-import android.os.Build
 import android.util.Log
 
 class FidoInitProvider : ContentProvider() {
@@ -14,7 +11,15 @@ class FidoInitProvider : ContentProvider() {
         Log.i(TAG, "provider init")
         context?.let {
             FidoKeepAliveJobService.schedule(it)
-            startSyncService(it)
+            // onCreate runs on every cold start of this process, including when
+            // the system spawns it in the background to serve a Credential
+            // Manager ceremony. requestSync tolerates the background
+            // foreground-service-start restriction — an unguarded start here
+            // throws ForegroundServiceStartNotAllowedException, which crashes
+            // this ContentProvider.onCreate and takes the ceremony down as a
+            // generic "unknown error". The foreground provider activity starts
+            // the service from a context where the start is allowed.
+            FidoSyncService.requestSync(it, "provider_init")
         }
         return true
     }
@@ -39,18 +44,6 @@ class FidoInitProvider : ContentProvider() {
         selection: String?,
         selectionArgs: Array<out String>?
     ): Int = 0
-
-    private fun startSyncService(context: Context) {
-        val intent = Intent(context, FidoSyncService::class.java).apply {
-            action = FidoSyncService.ACTION_SYNC_NOW
-            putExtra(FidoSyncService.EXTRA_REASON, "provider_init")
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            context.startForegroundService(intent)
-        } else {
-            context.startService(intent)
-        }
-    }
 
     companion object {
         private const val TAG = "AbkFidoCompanion"

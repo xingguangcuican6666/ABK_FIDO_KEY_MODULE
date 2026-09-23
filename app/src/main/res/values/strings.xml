@@ -28,6 +28,21 @@
     <string name="status_host_waiting">Waiting for a USB host</string>
     <string name="status_disabled">Websites are refused while this switch is off.</string>
 
+    <!-- System credential provider -->
+    <string name="section_system_provider">System provider</string>
+    <string name="provider_row_title">System passkey provider</string>
+    <string name="provider_status_preferred">Enabled, and set as the system default</string>
+    <string name="provider_status_enabled">Enabled, but another app is the system default</string>
+    <string name="provider_status_disabled_with_current">Off · current default: %1$s</string>
+    <string name="provider_status_disabled">Off · tap to become the system FIDO provider</string>
+    <string name="provider_action_open_settings">Manage in system settings</string>
+    <string name="provider_action_set_preferred">Set as system default (root)</string>
+    <string name="provider_action_restore">Restore the previous provider (root)</string>
+    <string name="provider_enable_done">ABK is now the system FIDO provider</string>
+    <string name="provider_restore_done">Restored the previous provider</string>
+    <string name="provider_change_failed">Could not change the provider. This needs root.</string>
+    <string name="provider_settings_unavailable">No credential-provider settings screen was found.</string>
+
     <string name="section_wireless">Wireless</string>
     <string name="wireless_switch_title">FIDO over Wi‑Fi</string>
     <string name="wireless_switch_summary">Let an authorized computer on this network use the key</string>

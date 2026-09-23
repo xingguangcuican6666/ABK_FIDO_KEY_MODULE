@@ -57,6 +57,25 @@
                 android:paddingStart="24dp"
                 android:paddingTop="12dp"
                 android:paddingEnd="24dp" />
+
+            <TextView
+                android:id="@+id/providerSection"
+                style="@style/AbkSectionHeader"
+                android:text="@string/section_system_provider" />
+
+            <LinearLayout
+                android:id="@+id/providerRow"
+                style="@style/AbkRow">
+
+                <TextView
+                    style="@style/AbkRowTitle"
+                    android:text="@string/provider_row_title" />
+
+                <TextView
+                    android:id="@+id/providerSummary"
+                    style="@style/AbkRowSummary"
+                    android:text="@string/provider_status_disabled" />
+            </LinearLayout>
             <TextView
                 style="@style/AbkSectionHeader"
                 android:text="@string/section_wireless" />
