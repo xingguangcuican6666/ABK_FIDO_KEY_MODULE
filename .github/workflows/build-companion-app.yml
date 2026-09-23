@@ -27,6 +27,11 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          # Google de-listed the deprecated `tools` SDK package; the action's
+          # default (`tools platform-tools`) now fails at sdkmanager. Install
+          # only platform-tools — Gradle/AGP fetches the rest on demand.
+          packages: platform-tools
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
